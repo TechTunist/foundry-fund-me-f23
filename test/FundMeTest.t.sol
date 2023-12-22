@@ -1,6 +1,6 @@
 //SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.18;
 
 import {Test, console} from "forge-std/Test.sol";
 import {FundMe} from "../src/FundMe.sol";
@@ -11,11 +11,16 @@ contract FundMeTest is Test // inherit from the Test contract
 {
     FundMe fundMe; // global scope for use in other test functions
 
+    address USER = makeAddr("user");
+    uint256 constant SEND_VALUE = 0.1 ether; // 100000000000000000 (17 zero's)
+    uint256 STARTING_BALANCE = 10 ether;
+
     function setUp() external {
 
         // fundMe = new FundMe(0x694AA1769357215DE4FAC081bf1f309aDC325306);
         DeployFundMe deployFundMe = new DeployFundMe();
         fundMe = deployFundMe.run();
+        vm.deal(USER, STARTING_BALANCE);
     }
 
     function testMinimumdollarIsFive() public {
@@ -23,12 +28,80 @@ contract FundMeTest is Test // inherit from the Test contract
     }
 
     function testOwnerIsMsgSender() public {
-        assertEq(msg.sender, fundMe.i_owner());
+        assertEq(msg.sender, fundMe.getOwner());
     }
 
     function testPriceVersionIsAccurate() public {
         uint256 version = fundMe.getVersion();
         assertEq(version, 4);
+    }
+
+    function testFundFailsWithoutEnoughETH() public {
+        vm.expectRevert(); // telling foundry the next line should revert
+        fundMe.fund();
+    }
+
+
+    // any tests we write after the following modifier can kind of inherit from it as below:
+
+    modifier funded() {
+        vm.prank(USER);
+        fundMe.fund{value: SEND_VALUE}();
+        _;
+    }
+
+
+    function testFundUpdatesFundedDataStructures() public funded {
+        uint256 amountFunded = fundMe.getAddressToAmountFunded(USER);
+        assertEq(amountFunded, SEND_VALUE);
+    }
+
+    function testAddsFunderToArrayOfFunders() public funded {
+        address funder = fundMe.getFunder(0);
+        assertEq(funder , USER);
+    }
+
+    function testOnlyOwnerCanWithdraw() public funded {
+        vm.expectRevert();
+        fundMe.withdraw();
+    }
+
+    function testWithdrawFromASingleFunder() public funded {
+        // Arrange (get current balance to compare to after withdraw)
+        uint256 startingOwnerBalance = fundMe.getOwner().balance;
+        uint256 startingFundMeBalance = address(fundMe).balance;
+
+        // Act
+        vm.prank(fundMe.getOwner());
+        fundMe.withdraw();
+        
+        // Assert
+        uint256 endingOwnerBalance = fundMe.getOwner().balance;
+        uint256 endingFundMeBalance = address(fundMe).balance;
+        assertEq(endingFundMeBalance, 0);
+        assertEq(startingFundMeBalance + startingOwnerBalance, endingOwnerBalance);
+    }
+
+    function testWithdrawFromMultipleFunders() public funded {
+        // Arrange
+        uint160 numberOfFunders = 10;
+        uint160 startingFunderIndex = 1;
+
+        for (uint160 i = startingFunderIndex; i < numberOfFunders; i++){
+            hoax(address(i), SEND_VALUE);
+            fundMe.fund{value: SEND_VALUE}();
+        }
+
+        // Act
+        uint256 startingOwnerBalance = fundMe.getOwner().balance;
+        uint256 startingFundMeBalance = address(fundMe).balance;
+
+        vm.prank(fundMe.getOwner());
+        fundMe.withdraw();
+
+        // Assert
+        assert(address(fundMe).balance == 0);
+        assert(startingFundMeBalance + startingOwnerBalance == fundMe.getOwner().balance);
     }
 
     // how to work with addresses outside our testing system
@@ -40,10 +113,5 @@ contract FundMeTest is Test // inherit from the Test contract
         // testing our code on a simulated real environment
     // 4. Staging
         // testing our code in a real environment that is not production
-
-    
-
-
-
 
 }
